@@ -13,24 +13,31 @@
 <script src="https://cdn.tailwindcss.com/3.4.16"></script>
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <style>
-  :root { --cw: 92px; --ch: 44px; --hw: 34px; }
+  :root { --cw: 92px; --ch: 48px; --hw: 34px; --hh: 28px; --fs: 11px; }
   html, body { height: 100%; }
   body { background: #f1f5f9; -webkit-tap-highlight-color: transparent; overscroll-behavior: none; }
   button { touch-action: manipulation; -webkit-touch-callout: none; user-select: none; }
 
   /* ---------- Floor plan grid ---------- */
-  #grid { display: grid; grid-auto-rows: var(--ch); width: max-content; padding-bottom: 6px; }
+  :root { --pw: 30px; --ph: 26px; }
+  #gridWrap { background:
+      linear-gradient(to bottom, #f1f5f9 var(--hh), #cbd5e1 var(--hh), #cbd5e1 calc(var(--hh) + 1px), transparent calc(var(--hh) + 1px)),
+      linear-gradient(to right, #f1f5f9 var(--hw), #cbd5e1 var(--hw), #cbd5e1 calc(var(--hw) + 1px), #fff calc(var(--hw) + 1px)); }
+  #grid { display: grid; width: max-content; min-width: 100%; padding-bottom: 6px; }
+  .g-pad { margin: 3px; border-radius: 5px; border: 1px dashed #e2e8f0; color: #cbd5e1; font: 600 13px system-ui;
+           display: flex; align-items: center; justify-content: center; cursor: pointer; }
+  .g-pad:active { background: #eff6ff; color: #2563eb; }
   .g-corner, .g-ch, .g-rh {
     font: 600 11px/1 system-ui, sans-serif; color: #64748b; background: #f1f5f9;
     display: flex; align-items: center; justify-content: center;
   }
   .g-corner { position: sticky; top: 0; left: 0; z-index: 3; border-right: 1px solid #cbd5e1; border-bottom: 1px solid #cbd5e1; }
-  .g-ch { position: sticky; top: 0; z-index: 2; border-bottom: 1px solid #cbd5e1; height: 26px; }
+  .g-ch { position: sticky; top: 0; z-index: 2; border-bottom: 1px solid #cbd5e1; }
   .g-rh { position: sticky; left: 0; z-index: 1; border-right: 1px solid #cbd5e1; }
   .g-cell {
     margin: 3px; border-radius: 6px; display: flex; align-items: center; justify-content: center;
     text-align: center; padding: 2px 4px; overflow: hidden; word-break: break-all;
-    font: 500 11px/1.15 ui-monospace, SFMono-Regular, Menlo, monospace;
+    font: 500 var(--fs)/1.15 ui-monospace, SFMono-Regular, Menlo, monospace;
     scroll-margin: 34px 10px 10px 44px; cursor: pointer;
   }
   .g-code  { background: #cbd5e1; border: 1px solid #94a3b8; color: #0f172a; }
@@ -44,8 +51,10 @@
   .g-active.g-mark { background: #fef3c7; }
 
   /* ---------- Camera ---------- */
-  #camArea { height: 76px; transition: height .2s ease; }
-  #camArea[data-active="true"] { height: 34dvh; min-height: 190px; }
+  #camArea { height: 68px; transition: height .2s ease; }
+  #camArea[data-active="true"] { height: clamp(170px, 32dvh, 320px); }
+  #camArea .cam-btns { position: absolute; left: 0; right: 0; bottom: 10px; display: flex; justify-content: center; }
+  #camArea[data-active="false"] #camMsg { display: none; }
   #reader { position: absolute; inset: 0; overflow: hidden; }
   #reader video { width: 100% !important; height: 100% !important; object-fit: cover; display: block; }
   #aim { display: none; }
@@ -62,6 +71,20 @@
   .dpad-btn:active { transform: translateY(2px); box-shadow: none; background: #475569; }
   .dpad-sm { background: #e2e8f0; color: #334155; box-shadow: 0 2px 0 #94a3b8; font: 600 11px system-ui; }
   .dpad-sm:active { background: #cbd5e1; }
+  #dpad { gap: 6px; }
+  .bottom-btn { height: 48px; }
+  /* Shorter phones / camera open: compact controls so the grid keeps usable space */
+  @media (max-height: 780px) {
+    .dpad-btn { width: 58px; height: 46px; }
+    #dpad { gap: 5px; }
+    .bottom-btn { height: 42px; }
+    #dpadRow { margin: 6px 0; }
+  }
+  @media (max-height: 640px) {
+    .dpad-btn { width: 54px; height: 40px; }
+    .dpad-btn svg { width: 22px; height: 22px; }
+    .bottom-btn { height: 38px; }
+  }
   dialog::backdrop { background: rgba(15, 23, 42, .55); }
   dialog { max-height: 90dvh; }
   .seg button[aria-pressed="true"] { background: #2563eb; color: #fff; border-color: #2563eb; }
@@ -93,8 +116,8 @@
   <div id="reader"></div>
   <div id="aim" class="absolute inset-0 pointer-events-none"></div>
   <div id="flash" class="absolute inset-0 bg-emerald-400 pointer-events-none"></div>
-  <div id="camMsg" class="absolute top-2 inset-x-0 text-center text-[11px] text-slate-600 pointer-events-none">Camera off</div>
-  <div class="absolute bottom-3 inset-x-0 flex justify-center">
+  <div id="camMsg" class="absolute top-2 inset-x-0 text-center text-[11px] text-white/80 pointer-events-none"></div>
+  <div class="cam-btns">
     <div class="flex rounded-lg overflow-hidden shadow-lg">
       <button id="btnScan" class="h-12 px-6 bg-blue-600 text-white font-semibold active:bg-blue-700">Scan Barcode</button>
       <button id="btnTorch" class="h-12 w-12 bg-slate-600 text-white text-xl disabled:opacity-40 active:bg-slate-700" disabled aria-label="Toggle flashlight" title="Flashlight">🔦</button>
@@ -112,8 +135,8 @@
     <button id="btnStep" class="shrink-0 h-8 px-2 rounded-md border border-slate-300 text-xs text-slate-700 active:bg-slate-100">Auto-step: →</button>
   </div>
 
-  <div class="flex justify-center my-2">
-    <div class="grid grid-cols-3 gap-1.5">
+  <div id="dpadRow" class="flex justify-center my-2">
+    <div id="dpad" class="grid grid-cols-3">
       <button id="btnUndo2" class="dpad-btn dpad-sm">↶ Undo</button>
       <button data-dir="up" class="dpad-btn" aria-label="Up"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
       <button id="btnClear" class="dpad-btn dpad-sm">✕ Clear</button>
@@ -127,8 +150,8 @@
   </div>
 
   <div class="grid grid-cols-2 gap-2">
-    <button id="btnEntrance" class="h-12 rounded-lg border-2 border-slate-700 font-medium active:bg-slate-100">Mark Entrance</button>
-    <button id="btnExport" class="h-12 rounded-lg bg-blue-600 text-white font-medium active:bg-blue-700">Export TSV/CSV</button>
+    <button id="btnEntrance" class="bottom-btn rounded-lg border-2 border-slate-700 font-medium active:bg-slate-100">Mark Entrance</button>
+    <button id="btnExport" class="bottom-btn rounded-lg bg-blue-600 text-white font-medium active:bg-blue-700">Export TSV/CSV</button>
   </div>
 </section>
 
@@ -329,7 +352,11 @@ function renderGrid() {
   const counts = {};
   for (const k in S.cells) if (!S.cells[k].m) counts[S.cells[k].v] = (counts[S.cells[k].v] || 0) + 1;
 
-  gridEl.style.gridTemplateColumns = `var(--hw) repeat(${c1 - c0 + 1}, var(--cw))`;
+  // The outer ring (PAD) is a thin "+" strip: tap it, or move into it, to grow the layout.
+  gridDims = { cols: v.maxC - v.minC + 1, rows: v.maxR - v.minR + 1 };
+  sizeGrid();
+  gridEl.style.gridTemplateColumns = `var(--hw) var(--pw) repeat(${gridDims.cols}, var(--cw)) var(--pw)`;
+  gridEl.style.gridTemplateRows = `var(--hh) var(--ph) repeat(${gridDims.rows}, var(--ch)) var(--ph)`;
   const h = ['<div class="g-corner">Row</div>'];
   for (let c = c0; c <= c1; c++) {
     const inb = c >= v.minC && c <= v.maxC;
@@ -339,10 +366,10 @@ function renderGrid() {
     const inR = r >= v.minR && r <= v.maxR;
     h.push(`<div class="g-rh">${inR ? r - v.minR + 1 : ''}</div>`);
     for (let c = c0; c <= c1; c++) {
+      if (!inR || c < v.minC || c > v.maxC) { h.push(`<div class="g-pad g-cell-pad" data-r="${r}" data-c="${c}" aria-label="Extend layout">+</div>`); continue; }
       const cell = S.cells[key(r, c)];
       const active = r === S.cur.r && c === S.cur.c;
       let cls = 'g-cell ' + (cell ? (cell.m ? 'g-mark' : 'g-code') : 'g-empty');
-      if (!inR || c < v.minC || c > v.maxC) cls += ' g-out';
       if (cell && !cell.m && counts[cell.v] > 1) cls += ' g-dup';
       if (active) cls += ' g-active';
       const text = cell ? esc(cell.v) : (active ? '(Empty)' : '');
@@ -352,6 +379,22 @@ function renderGrid() {
   gridEl.innerHTML = h.join('');
   scrollToCursor();
 }
+
+/** Fit cells to the visible area: small layouts fill the panel, large ones keep a readable minimum and scroll. */
+let gridDims = { cols: 3, rows: 3 };
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+function sizeGrid() {
+  const wrap = $('gridWrap');
+  const w = wrap.clientWidth, h = wrap.clientHeight;
+  if (!w || !h) return;
+  const cw = clamp(Math.floor((w - 34 - 60 - 2) / gridDims.cols), 76, 160);
+  const ch = clamp(Math.floor((h - 28 - 52 - 8) / gridDims.rows), 42, 72);
+  const st = gridEl.style;
+  st.setProperty('--cw', cw + 'px');
+  st.setProperty('--ch', ch + 'px');
+  st.setProperty('--fs', cw >= 120 && ch >= 52 ? '13px' : cw >= 100 ? '12px' : cw >= 86 ? '11px' : '10px');
+}
+new ResizeObserver(() => { sizeGrid(); scrollToCursor(); }).observe($('gridWrap'));
 
 function scrollToCursor() {
   const a = gridEl.querySelector('.g-active');
@@ -490,7 +533,7 @@ function setCamUI(active) {
   $('btnScan').textContent = active ? 'Stop Scanning' : 'Scan Barcode';
   $('btnScan').classList.toggle('bg-red-600', active);
   $('btnScan').classList.toggle('bg-blue-600', !active);
-  $('camMsg').textContent = active ? '' : 'Camera off';
+  $('camMsg').textContent = active ? 'Starting camera…' : '';
   if (!active) { $('btnTorch').disabled = true; torchOn = false; updateTorchUI(); }
 }
 
@@ -519,6 +562,7 @@ async function startScan() {
       onDecoded, () => {}
     );
     scanning = true;
+    $('camMsg').textContent = '';
     try { $('btnTorch').disabled = !qr.getRunningTrackCapabilities().torch; } catch (_) { $('btnTorch').disabled = true; }
     try { wakeLock = await navigator.wakeLock?.request('screen'); } catch (_) {}
   } catch (e) {
@@ -714,7 +758,7 @@ document.querySelectorAll('[data-dir]').forEach(b => holdRepeat(b, () => move(b.
 document.addEventListener('contextmenu', e => { if (e.target.closest('button, #grid')) e.preventDefault(); });
 
 gridEl.addEventListener('click', e => {
-  const el = e.target.closest('.g-cell'); if (!el) return;
+  const el = e.target.closest('.g-cell, .g-pad'); if (!el) return;
   const r = +el.dataset.r, c = +el.dataset.c;
   if (r === S.cur.r && c === S.cur.c) openEdit(); else setCursor(r, c);
 });
