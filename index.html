@@ -1,0 +1,753 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>Warehouse Layout Mapper</title>
+<meta name="theme-color" content="#1e293b">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<script src="https://cdn.tailwindcss.com/3.4.16"></script>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+  :root { --cw: 92px; --ch: 44px; --hw: 34px; }
+  html, body { height: 100%; }
+  body { background: #f1f5f9; -webkit-tap-highlight-color: transparent; overscroll-behavior: none; }
+  button { touch-action: manipulation; -webkit-touch-callout: none; user-select: none; }
+
+  /* ---------- Floor plan grid ---------- */
+  #grid { display: grid; grid-auto-rows: var(--ch); width: max-content; padding-bottom: 6px; }
+  .g-corner, .g-ch, .g-rh {
+    font: 600 11px/1 system-ui, sans-serif; color: #64748b; background: #f1f5f9;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .g-corner { position: sticky; top: 0; left: 0; z-index: 3; border-right: 1px solid #cbd5e1; border-bottom: 1px solid #cbd5e1; }
+  .g-ch { position: sticky; top: 0; z-index: 2; border-bottom: 1px solid #cbd5e1; height: 26px; }
+  .g-rh { position: sticky; left: 0; z-index: 1; border-right: 1px solid #cbd5e1; }
+  .g-cell {
+    margin: 3px; border-radius: 6px; display: flex; align-items: center; justify-content: center;
+    text-align: center; padding: 2px 4px; overflow: hidden; word-break: break-all;
+    font: 500 11px/1.15 ui-monospace, SFMono-Regular, Menlo, monospace;
+    scroll-margin: 34px 10px 10px 44px; cursor: pointer;
+  }
+  .g-code  { background: #cbd5e1; border: 1px solid #94a3b8; color: #0f172a; }
+  .g-mark  { background: #fde68a; border: 1px solid #f59e0b; color: #78350f; font-weight: 700; font-family: system-ui, sans-serif; }
+  .g-empty { background: #f8fafc; border: 1px dashed #cbd5e1; color: #94a3b8; }
+  .g-out   { opacity: .45; }
+  .g-dup   { box-shadow: inset 0 0 0 2px #ef4444; }
+  .g-active { border: 3px solid #2563eb !important; background: #fff; color: #0f172a; opacity: 1;
+              box-shadow: 0 0 0 3px rgba(37, 99, 235, .25); }
+  .g-active.g-empty { color: #94a3b8; font-style: italic; }
+  .g-active.g-mark { background: #fef3c7; }
+
+  /* ---------- Camera ---------- */
+  #camArea { height: 76px; transition: height .2s ease; }
+  #camArea[data-active="true"] { height: 34dvh; min-height: 190px; }
+  #reader { position: absolute; inset: 0; overflow: hidden; }
+  #reader video { width: 100% !important; height: 100% !important; object-fit: cover; display: block; }
+  #aim { display: none; }
+  #camArea[data-active="true"] #aim { display: block; }
+  #aim::before { content: ""; position: absolute; left: 8%; right: 8%; top: 45%; height: 2px;
+                 background: #ef4444; box-shadow: 0 0 8px #ef4444; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  #flash { opacity: 0; transition: opacity .35s; }
+  #flash.on { opacity: .55; transition: none; }
+
+  /* ---------- Controls ---------- */
+  .dpad-btn { width: 64px; height: 56px; border-radius: 12px; display: flex; align-items: center; justify-content: center;
+              background: #64748b; color: #fff; box-shadow: 0 2px 0 #334155; }
+  .dpad-btn:active { transform: translateY(2px); box-shadow: none; background: #475569; }
+  .dpad-sm { background: #e2e8f0; color: #334155; box-shadow: 0 2px 0 #94a3b8; font: 600 11px system-ui; }
+  .dpad-sm:active { background: #cbd5e1; }
+  dialog::backdrop { background: rgba(15, 23, 42, .55); }
+  dialog { max-height: 90dvh; }
+  .seg button[aria-pressed="true"] { background: #2563eb; color: #fff; border-color: #2563eb; }
+  #toast { transition: transform .2s, opacity .2s; }
+  #toast.hide { opacity: 0; transform: translate(-50%, 12px); pointer-events: none; }
+</style>
+</head>
+
+<body class="h-[100dvh] flex flex-col overflow-hidden text-slate-900 select-none">
+
+<!-- ===== Header ===== -->
+<header class="flex items-center gap-2 px-3 bg-slate-800 text-white shrink-0" style="padding-top:max(env(safe-area-inset-top),6px);padding-bottom:6px">
+  <div class="flex-1 min-w-0">
+    <div class="font-semibold text-sm leading-tight truncate">Warehouse Layout Mapper</div>
+    <div id="stats" class="text-[11px] text-slate-300 leading-tight">0 cells</div>
+  </div>
+  <span id="savedTag" class="text-[11px] text-emerald-300">Saved</span>
+  <button id="btnUndo" class="h-9 px-3 rounded-lg bg-slate-700 text-sm active:bg-slate-600" aria-label="Undo">↶ Undo</button>
+  <button id="btnMenu" class="h-9 w-9 rounded-lg bg-slate-700 text-lg active:bg-slate-600" aria-label="Menu">☰</button>
+</header>
+
+<!-- ===== Floor plan grid ===== -->
+<section id="gridWrap" class="flex-1 min-h-0 overflow-auto bg-white border-b border-slate-300">
+  <div id="grid" role="grid" aria-label="Warehouse floor plan"></div>
+</section>
+
+<!-- ===== Camera preview ===== -->
+<section id="camArea" data-active="false" class="relative shrink-0 bg-slate-300 overflow-hidden">
+  <div id="reader"></div>
+  <div id="aim" class="absolute inset-0 pointer-events-none"></div>
+  <div id="flash" class="absolute inset-0 bg-emerald-400 pointer-events-none"></div>
+  <div id="camMsg" class="absolute top-2 inset-x-0 text-center text-[11px] text-slate-600 pointer-events-none">Camera off</div>
+  <div class="absolute bottom-3 inset-x-0 flex justify-center">
+    <div class="flex rounded-lg overflow-hidden shadow-lg">
+      <button id="btnScan" class="h-12 px-6 bg-blue-600 text-white font-semibold active:bg-blue-700">Scan Barcode</button>
+      <button id="btnTorch" class="h-12 w-12 bg-slate-600 text-white text-xl disabled:opacity-40 active:bg-slate-700" disabled aria-label="Toggle flashlight" title="Flashlight">🔦</button>
+    </div>
+  </div>
+</section>
+
+<!-- ===== Navigation & controls ===== -->
+<section class="bg-white shrink-0 px-3 pt-2" style="padding-bottom:max(env(safe-area-inset-bottom),10px)">
+  <div class="flex items-start gap-2">
+    <div class="flex-1 min-w-0 text-xs leading-snug">
+      <div>Current Cell: <b id="curName">A1</b> <span id="curContent" class="text-slate-500"></span></div>
+      <div class="truncate">Last Scan: <b id="lastScan" class="font-mono">—</b></div>
+    </div>
+    <button id="btnStep" class="shrink-0 h-8 px-2 rounded-md border border-slate-300 text-xs text-slate-700 active:bg-slate-100">Auto-step: →</button>
+  </div>
+
+  <div class="flex justify-center my-2">
+    <div class="grid grid-cols-3 gap-1.5">
+      <button id="btnUndo2" class="dpad-btn dpad-sm">↶ Undo</button>
+      <button data-dir="up" class="dpad-btn" aria-label="Up"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M12 19V5M5 12l7-7 7 7"/></svg></button>
+      <button id="btnClear" class="dpad-btn dpad-sm">✕ Clear</button>
+      <button data-dir="left" class="dpad-btn" aria-label="Left"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M19 12H5M12 5l-7 7 7 7"/></svg></button>
+      <button id="btnEdit" class="dpad-btn !bg-slate-300 !text-slate-700 text-xs font-semibold" aria-label="Edit cell">Edit</button>
+      <button data-dir="right" class="dpad-btn" aria-label="Right"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 12h14M12 5l7 7-7 7"/></svg></button>
+      <div></div>
+      <button data-dir="down" class="dpad-btn" aria-label="Down"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M12 5v14M5 12l7 7 7-7"/></svg></button>
+      <div></div>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-2 gap-2">
+    <button id="btnEntrance" class="h-12 rounded-lg border-2 border-slate-700 font-medium active:bg-slate-100">Mark Entrance</button>
+    <button id="btnExport" class="h-12 rounded-lg bg-blue-600 text-white font-medium active:bg-blue-700">Export TSV/CSV</button>
+  </div>
+</section>
+
+<div id="toast" class="hide fixed left-1/2 bottom-28 -translate-x-1/2 z-50 max-w-[92vw] flex items-center gap-3 px-4 py-3 rounded-xl bg-slate-900 text-white text-sm shadow-2xl">
+  <span id="toastMsg"></span>
+  <button id="toastAct" class="hidden shrink-0 px-3 py-1.5 rounded-md bg-amber-400 text-slate-900 font-semibold"></button>
+</div>
+
+<!-- ===== Edit dialog ===== -->
+<dialog id="dlgEdit" class="w-[min(92vw,420px)] rounded-2xl p-0 shadow-2xl">
+  <form method="dialog" class="p-4 space-y-3" id="editForm">
+    <div class="flex items-center justify-between">
+      <h2 class="font-semibold">Edit cell <span id="editName"></span></h2>
+      <button type="button" data-close class="text-2xl leading-none text-slate-400 px-2" aria-label="Close">×</button>
+    </div>
+    <input id="editVal" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false"
+      class="w-full h-12 px-3 rounded-lg border border-slate-300 font-mono text-base focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Barcode / location code">
+    <label class="flex items-center gap-2 text-sm"><input id="editMark" type="checkbox" class="w-5 h-5"> Landmark (not a barcode)</label>
+    <div>
+      <div class="text-xs text-slate-500 mb-1">Quick landmarks</div>
+      <div id="chips" class="flex flex-wrap gap-1.5"></div>
+    </div>
+    <div class="grid grid-cols-2 gap-2 pt-1">
+      <button type="button" id="editClear" class="h-11 rounded-lg border border-red-300 text-red-700 font-medium">Clear cell</button>
+      <button type="submit" value="save" class="h-11 rounded-lg bg-blue-600 text-white font-medium">Save</button>
+    </div>
+    <details class="text-sm">
+      <summary class="text-slate-600 py-1">Rows &amp; columns…</summary>
+      <div class="grid grid-cols-2 gap-2 pt-2">
+        <button type="button" data-struct="insRow" class="h-10 rounded-lg bg-slate-100">+ Row above</button>
+        <button type="button" data-struct="insCol" class="h-10 rounded-lg bg-slate-100">+ Column left</button>
+        <button type="button" data-struct="delRow" class="h-10 rounded-lg bg-slate-100 text-red-700">Delete row</button>
+        <button type="button" data-struct="delCol" class="h-10 rounded-lg bg-slate-100 text-red-700">Delete column</button>
+      </div>
+    </details>
+  </form>
+</dialog>
+
+<!-- ===== Export dialog ===== -->
+<dialog id="dlgExport" class="w-[min(92vw,460px)] rounded-2xl p-0 shadow-2xl">
+  <div class="p-4 space-y-3">
+    <div class="flex items-center justify-between">
+      <h2 class="font-semibold">Export floor plan</h2>
+      <button data-close class="text-2xl leading-none text-slate-400 px-2" aria-label="Close">×</button>
+    </div>
+    <div class="seg flex rounded-lg overflow-hidden border border-slate-300 w-max" id="fmtSeg">
+      <button data-fmt="tsv" class="px-4 h-10 border-r border-slate-300">TSV</button>
+      <button data-fmt="csv" class="px-4 h-10">CSV</button>
+    </div>
+    <p id="expInfo" class="text-xs text-slate-500"></p>
+    <textarea id="expPreview" readonly rows="7" class="w-full p-2 rounded-lg border border-slate-200 bg-slate-50 font-mono text-[11px] whitespace-pre overflow-auto"></textarea>
+    <div class="grid grid-cols-3 gap-2">
+      <button id="expCopy" class="h-11 rounded-lg bg-slate-100 font-medium">Copy</button>
+      <button id="expShare" class="h-11 rounded-lg bg-slate-100 font-medium">Share</button>
+      <button id="expDownload" class="h-11 rounded-lg bg-blue-600 text-white font-medium">Download</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- ===== Menu / settings dialog ===== -->
+<dialog id="dlgMenu" class="w-[min(92vw,420px)] rounded-2xl p-0 shadow-2xl">
+  <div class="p-4 space-y-4 text-sm">
+    <div class="flex items-center justify-between">
+      <h2 class="font-semibold text-base">Settings</h2>
+      <button data-close class="text-2xl leading-none text-slate-400 px-2" aria-label="Close">×</button>
+    </div>
+    <div>
+      <div class="text-xs text-slate-500 mb-1">After a scan, move the cursor</div>
+      <div class="seg flex rounded-lg overflow-hidden border border-slate-300" id="stepSeg">
+        <button data-step="off" class="flex-1 h-10 border-r border-slate-300">Off</button>
+        <button data-step="right" class="flex-1 h-10 border-r border-slate-300 text-lg">→</button>
+        <button data-step="down" class="flex-1 h-10 border-r border-slate-300 text-lg">↓</button>
+        <button data-step="left" class="flex-1 h-10 border-r border-slate-300 text-lg">←</button>
+        <button data-step="up" class="flex-1 h-10 text-lg">↑</button>
+      </div>
+    </div>
+    <div class="space-y-2">
+      <label class="flex items-center justify-between"><span>Keep camera on between scans</span><input type="checkbox" data-set="continuous" class="w-5 h-5"></label>
+      <label class="flex items-center justify-between"><span>Warn on duplicate barcodes</span><input type="checkbox" data-set="dupCheck" class="w-5 h-5"></label>
+      <label class="flex items-center justify-between"><span>Beep on scan</span><input type="checkbox" data-set="sound" class="w-5 h-5"></label>
+      <label class="flex items-center justify-between"><span>Vibrate on scan</span><input type="checkbox" data-set="vibrate" class="w-5 h-5"></label>
+    </div>
+    <div class="grid grid-cols-2 gap-2">
+      <button id="btnImport" class="h-11 rounded-lg bg-slate-100 font-medium">Import TSV/CSV</button>
+      <button id="btnNew" class="h-11 rounded-lg border border-red-300 text-red-700 font-medium">New layout</button>
+    </div>
+    <input id="fileImport" type="file" accept=".tsv,.csv,.txt,text/csv,text/tab-separated-values,text/plain" class="hidden">
+    <p id="menuInfo" class="text-xs text-slate-500 leading-relaxed"></p>
+  </div>
+</dialog>
+
+<script>
+(() => {
+'use strict';
+
+/* ================= State & persistence ================= */
+const STORE_KEY = 'whs-layout-v1';
+const VERSION = '1.0.0';
+const PAD = 1; // empty ring of cells shown around the layout so it can grow in any direction
+const DIRS = { up: [-1, 0], down: [1, 0], left: [0, -1], right: [0, 1] };
+const ARROWS = { off: 'Off', up: '↑', down: '↓', left: '←', right: '→' };
+const STEP_CYCLE = ['right', 'down', 'left', 'up', 'off'];
+const LANDMARKS = ['ENTRANCE', 'EXIT', 'DOCK', 'PILLAR', 'AISLE', 'OFFICE', 'STAIRS', 'BLOCKED'];
+
+const fresh = () => ({
+  v: 1,
+  cells: {},              // "r,c" -> { v: "WHS-A01-01", m: true if landmark }
+  cur: { r: 0, c: 0 },    // active cursor (coordinates may go negative; export normalises)
+  last: '',
+  settings: { step: 'right', continuous: true, dupCheck: true, sound: true, vibrate: true },
+  saved: 0
+});
+
+function load() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (!raw) return fresh();
+    const s = JSON.parse(raw);
+    const base = fresh();
+    return { ...base, ...s, settings: { ...base.settings, ...(s.settings || {}) }, cells: s.cells || {}, cur: s.cur || base.cur };
+  } catch (e) { console.warn('Restore failed', e); return fresh(); }
+}
+
+let S = load();
+const undoStack = [];
+
+function save() {
+  S.saved = Date.now();
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(S));
+    $('savedTag').textContent = 'Saved';
+    $('savedTag').className = 'text-[11px] text-emerald-300';
+  } catch (e) {
+    $('savedTag').textContent = 'NOT SAVED';
+    $('savedTag').className = 'text-[11px] text-red-300 font-bold';
+    toast('⚠ Could not save to device storage. Export now to avoid losing data.', { ms: 6000 });
+  }
+}
+
+/** Run a mutation with undo support, then persist and redraw. */
+function commit(fn) {
+  undoStack.push(JSON.stringify({ cells: S.cells, cur: S.cur, last: S.last }));
+  if (undoStack.length > 100) undoStack.shift();
+  fn();
+  save();
+  render();
+}
+
+function undo() {
+  const snap = undoStack.pop();
+  if (!snap) { toast('Nothing to undo'); return; }
+  Object.assign(S, JSON.parse(snap));
+  save(); render(); toast('Undone');
+}
+
+/* ================= Helpers ================= */
+const $ = id => document.getElementById(id);
+const key = (r, c) => r + ',' + c;
+const esc = s => String(s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+function colName(n) { let s = ''; n++; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
+
+function contentBounds() {
+  let b = null;
+  for (const k in S.cells) {
+    const [r, c] = k.split(',').map(Number);
+    if (!b) b = { minR: r, maxR: r, minC: c, maxC: c };
+    else { if (r < b.minR) b.minR = r; if (r > b.maxR) b.maxR = r; if (c < b.minC) b.minC = c; if (c > b.maxC) b.maxC = c; }
+  }
+  return b;
+}
+function viewBounds() {
+  const { r, c } = S.cur;
+  const b = contentBounds() || { minR: r, maxR: r, minC: c, maxC: c };
+  return { minR: Math.min(b.minR, r), maxR: Math.max(b.maxR, r), minC: Math.min(b.minC, c), maxC: Math.max(b.maxC, c) };
+}
+let origin = { minR: 0, minC: 0 };
+const cellName = (r, c) => {
+  const cn = c - origin.minC, rn = r - origin.minR;
+  return (cn < 0 ? '?' : colName(cn)) + (rn < 0 ? '?' : rn + 1);
+};
+function findCode(code, exceptKey) {
+  for (const k in S.cells) if (k !== exceptKey && !S.cells[k].m && S.cells[k].v === code) return k;
+  return null;
+}
+
+/* ================= Rendering ================= */
+const gridEl = $('grid');
+let renderedBoundsKey = '';
+
+function render() { renderGrid(); renderStatus(); }
+
+function renderGrid() {
+  const v = viewBounds();
+  origin = v;
+  const r0 = v.minR - PAD, r1 = v.maxR + PAD, c0 = v.minC - PAD, c1 = v.maxC + PAD;
+  renderedBoundsKey = [r0, r1, c0, c1].join('|');
+
+  const counts = {};
+  for (const k in S.cells) if (!S.cells[k].m) counts[S.cells[k].v] = (counts[S.cells[k].v] || 0) + 1;
+
+  gridEl.style.gridTemplateColumns = `var(--hw) repeat(${c1 - c0 + 1}, var(--cw))`;
+  const h = ['<div class="g-corner">Row</div>'];
+  for (let c = c0; c <= c1; c++) {
+    const inb = c >= v.minC && c <= v.maxC;
+    h.push(`<div class="g-ch">${inb ? colName(c - v.minC) : ''}</div>`);
+  }
+  for (let r = r0; r <= r1; r++) {
+    const inR = r >= v.minR && r <= v.maxR;
+    h.push(`<div class="g-rh">${inR ? r - v.minR + 1 : ''}</div>`);
+    for (let c = c0; c <= c1; c++) {
+      const cell = S.cells[key(r, c)];
+      const active = r === S.cur.r && c === S.cur.c;
+      let cls = 'g-cell ' + (cell ? (cell.m ? 'g-mark' : 'g-code') : 'g-empty');
+      if (!inR || c < v.minC || c > v.maxC) cls += ' g-out';
+      if (cell && !cell.m && counts[cell.v] > 1) cls += ' g-dup';
+      if (active) cls += ' g-active';
+      const text = cell ? esc(cell.v) : (active ? '(Empty)' : '');
+      h.push(`<div class="${cls}" data-r="${r}" data-c="${c}" role="gridcell">${text}</div>`);
+    }
+  }
+  gridEl.innerHTML = h.join('');
+  scrollToCursor();
+}
+
+function scrollToCursor() {
+  const a = gridEl.querySelector('.g-active');
+  if (a) a.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+function renderStatus() {
+  const cell = S.cells[key(S.cur.r, S.cur.c)];
+  $('curName').textContent = cellName(S.cur.r, S.cur.c);
+  $('curContent').textContent = cell ? '· ' + cell.v : '· empty';
+  $('lastScan').textContent = S.last || '—';
+  $('btnStep').textContent = 'Auto-step: ' + ARROWS[S.settings.step];
+  const isEntrance = cell && cell.m && cell.v === 'ENTRANCE';
+  $('btnEntrance').textContent = isEntrance ? 'Unmark Entrance' : 'Mark Entrance';
+  const n = Object.keys(S.cells).length, b = contentBounds();
+  $('stats').textContent = n + ' cell' + (n === 1 ? '' : 's') + (b ? ` · ${b.maxR - b.minR + 1} rows × ${b.maxC - b.minC + 1} cols` : '');
+  $('btnUndo').disabled = $('btnUndo2').disabled = undoStack.length === 0;
+  $('btnUndo').style.opacity = $('btnUndo2').style.opacity = undoStack.length ? 1 : .45;
+}
+
+/* ================= Cursor movement ================= */
+function setCursor(r, c) {
+  S.cur = { r, c };
+  const v = viewBounds();
+  const k = [v.minR - PAD, v.maxR + PAD, v.minC - PAD, v.maxC + PAD].join('|');
+  if (k !== renderedBoundsKey) { renderGrid(); }
+  else {
+    // Fast path: only swap the highlight
+    const old = gridEl.querySelector('.g-active');
+    if (old) { old.classList.remove('g-active'); if (old.classList.contains('g-empty')) old.textContent = ''; }
+    const el = gridEl.querySelector(`[data-r="${r}"][data-c="${c}"]`);
+    if (el) { el.classList.add('g-active'); if (el.classList.contains('g-empty')) el.textContent = '(Empty)'; }
+    scrollToCursor();
+  }
+  renderStatus();
+  save();
+}
+function move(dir) { const [dr, dc] = DIRS[dir]; setCursor(S.cur.r + dr, S.cur.c + dc); }
+
+/* ================= Cell actions ================= */
+function place(raw, { fromScan = false, force = false } = {}) {
+  const code = String(raw).replace(/[\r\n\t]+/g, ' ').trim();
+  if (!code) return;
+  const k = key(S.cur.r, S.cur.c);
+  if (fromScan && !force && S.settings.dupCheck) {
+    const dupKey = findCode(code, k);
+    if (dupKey) {
+      const [dr, dc] = dupKey.split(',').map(Number);
+      feedback(false);
+      toast(`Duplicate: ${code} is already at ${cellName(dr, dc)}`, {
+        action: 'Place anyway', ms: 6000, onAction: () => place(code, { fromScan: true, force: true })
+      });
+      return;
+    }
+  }
+  commit(() => {
+    S.cells[k] = { v: code };
+    S.last = code;
+    if (S.settings.step !== 'off') { const [dr, dc] = DIRS[S.settings.step]; S.cur = { r: S.cur.r + dr, c: S.cur.c + dc }; }
+  });
+  if (fromScan) { feedback(true); flash(); }
+}
+
+function clearCell() {
+  const k = key(S.cur.r, S.cur.c);
+  if (!S.cells[k]) { toast('Cell already empty'); return; }
+  commit(() => { delete S.cells[k]; });
+}
+
+function toggleEntrance() {
+  const k = key(S.cur.r, S.cur.c), cell = S.cells[k];
+  if (cell && cell.m && cell.v === 'ENTRANCE') { commit(() => { delete S.cells[k]; }); return; }
+  if (cell && !confirm(`Replace "${cell.v}" with ENTRANCE?`)) return;
+  commit(() => { S.cells[k] = { v: 'ENTRANCE', m: true }; });
+  toast('Marked as Entrance');
+}
+
+/** Shift every cell on one axis to insert/delete a row or column at the cursor. */
+function restructure(kind) {
+  const { r: cr, c: cc } = S.cur;
+  const isRow = kind.endsWith('Row'), isDel = kind.startsWith('del');
+  if (isDel) {
+    const has = Object.keys(S.cells).some(k => { const [r, c] = k.split(',').map(Number); return isRow ? r === cr : c === cc; });
+    if (has && !confirm(`Delete this ${isRow ? 'row' : 'column'} and everything in it?`)) return;
+  }
+  commit(() => {
+    const next = {};
+    for (const k in S.cells) {
+      let [r, c] = k.split(',').map(Number);
+      const pos = isRow ? r : c, at = isRow ? cr : cc;
+      if (isDel) { if (pos === at) continue; if (pos > at) isRow ? r-- : c--; }
+      else if (pos >= at) isRow ? r++ : c++;
+      next[key(r, c)] = S.cells[k];
+    }
+    S.cells = next;
+  });
+  $('dlgEdit').close();
+  toast({ insRow: 'Row inserted', insCol: 'Column inserted', delRow: 'Row deleted', delCol: 'Column deleted' }[kind]);
+}
+
+/* ================= Feedback ================= */
+let audioCtx = null;
+function feedback(ok) {
+  if (S.settings.vibrate && navigator.vibrate) navigator.vibrate(ok ? 60 : [80, 60, 80]);
+  if (!S.settings.sound) return;
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.frequency.value = ok ? 1650 : 320; o.type = ok ? 'sine' : 'square';
+    g.gain.setValueAtTime(.18, audioCtx.currentTime);
+    g.gain.exponentialRampToValueAtTime(.001, audioCtx.currentTime + (ok ? .12 : .3));
+    o.connect(g).connect(audioCtx.destination); o.start(); o.stop(audioCtx.currentTime + (ok ? .12 : .3));
+  } catch (_) {}
+}
+function flash() { const f = $('flash'); f.classList.add('on'); requestAnimationFrame(() => requestAnimationFrame(() => f.classList.remove('on'))); }
+
+let toastTimer = null, toastAction = null;
+function toast(msg, { action, onAction, ms = 2200 } = {}) {
+  $('toastMsg').textContent = msg;
+  const btn = $('toastAct');
+  toastAction = onAction || null;
+  btn.classList.toggle('hidden', !action);
+  btn.textContent = action || '';
+  $('toast').classList.remove('hide');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => $('toast').classList.add('hide'), ms);
+}
+$('toastAct').addEventListener('click', () => { $('toast').classList.add('hide'); const fn = toastAction; toastAction = null; fn && fn(); });
+
+/* ================= Camera scanner ================= */
+let qr = null, scanning = false, starting = false, torchOn = false, wakeLock = null;
+let cooldownUntil = 0, lastRead = { code: '', t: 0 };
+
+function setCamUI(active) {
+  $('camArea').dataset.active = String(active);
+  $('btnScan').textContent = active ? 'Stop Scanning' : 'Scan Barcode';
+  $('btnScan').classList.toggle('bg-red-600', active);
+  $('btnScan').classList.toggle('bg-blue-600', !active);
+  $('camMsg').textContent = active ? '' : 'Camera off';
+  if (!active) { $('btnTorch').disabled = true; torchOn = false; updateTorchUI(); }
+}
+
+async function startScan() {
+  if (scanning || starting) return;
+  if (!window.Html5Qrcode) { toast('Scanner library not loaded — check your connection and reload.', { ms: 5000 }); return; }
+  if (!window.isSecureContext) { toast('Camera needs HTTPS (or localhost).', { ms: 5000 }); return; }
+  starting = true;
+  setCamUI(true);
+  await new Promise(r => setTimeout(r, 220)); // let the preview area expand first
+  try {
+    if (!qr) {
+      const F = Html5QrcodeSupportedFormats;
+      qr = new Html5Qrcode('reader', {
+        verbose: false,
+        formatsToSupport: [F.CODE_128, F.CODE_39, F.CODE_93, F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.ITF,
+                           F.CODABAR, F.QR_CODE, F.DATA_MATRIX, F.PDF_417, F.AZTEC],
+        useBarCodeDetectorIfSupported: true,                       // native Android decoder: faster & better for 1D codes
+        experimentalFeatures: { useBarCodeDetectorIfSupported: true }
+      });
+    }
+    await qr.start(
+      { facingMode: 'environment' },
+      { fps: 12, disableFlip: true,
+        videoConstraints: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 }, advanced: [{ focusMode: 'continuous' }] } },
+      onDecoded, () => {}
+    );
+    scanning = true;
+    try { $('btnTorch').disabled = !qr.getRunningTrackCapabilities().torch; } catch (_) { $('btnTorch').disabled = true; }
+    try { wakeLock = await navigator.wakeLock?.request('screen'); } catch (_) {}
+  } catch (e) {
+    setCamUI(false);
+    const msg = String(e && (e.name || e.message || e));
+    toast(/NotAllowed|Permission/i.test(msg) ? 'Camera permission denied. Allow it in site settings.' : 'Camera error: ' + msg, { ms: 5000 });
+  } finally { starting = false; }
+}
+
+async function stopScan() {
+  if (!qr || !scanning) { setCamUI(false); return; }
+  scanning = false;
+  try { await qr.stop(); } catch (_) {}
+  try { await wakeLock?.release(); } catch (_) {}
+  wakeLock = null;
+  setCamUI(false);
+}
+
+function onDecoded(text) {
+  const now = Date.now();
+  if (now < cooldownUntil) return;
+  // Same label still in view → ignore until it has left the frame for a moment
+  if (text === lastRead.code && now - lastRead.t < 2500) { lastRead.t = now; return; }
+  lastRead = { code: text, t: now };
+  cooldownUntil = now + 1100;
+  if (!S.settings.continuous) stopScan();
+  place(text, { fromScan: true });
+}
+
+function updateTorchUI() {
+  $('btnTorch').classList.toggle('bg-amber-400', torchOn);
+  $('btnTorch').classList.toggle('bg-slate-600', !torchOn);
+}
+async function toggleTorch() {
+  if (!scanning) return;
+  const want = !torchOn;
+  try { await qr.applyVideoConstraints({ advanced: [{ torch: want }] }); torchOn = want; }
+  catch (_) { toast('Flashlight not supported on this camera'); }
+  updateTorchUI();
+}
+
+/* ================= Hardware scanner (keyboard wedge) support =================
+   Rugged Android devices (Zebra, Honeywell…) "type" the barcode + Enter very fast. */
+let wedgeBuf = '', wedgeT = 0;
+document.addEventListener('keydown', e => {
+  if (document.querySelector('dialog[open]') || /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
+  const arrow = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' }[e.key];
+  if (arrow) { e.preventDefault(); move(arrow); return; }
+  const now = Date.now();
+  if (e.key === 'Enter') {
+    if (wedgeBuf.length >= 3 && now - wedgeT < 100) { e.preventDefault(); place(wedgeBuf, { fromScan: true }); }
+    wedgeBuf = ''; return;
+  }
+  if (e.key.length === 1) { if (now - wedgeT > 100) wedgeBuf = ''; wedgeBuf += e.key; wedgeT = now; }
+});
+
+/* ================= Export ================= */
+let expFmt = localStorage.getItem('whs-export-fmt') || 'tsv';
+
+function buildExport(fmt) {
+  const b = contentBounds();
+  if (!b) return '';
+  const cellOut = fmt === 'tsv'
+    ? v => v.replace(/[\t\r\n]+/g, ' ')
+    : v => /[",\r\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  const sep = fmt === 'tsv' ? '\t' : ',';
+  const lines = [];
+  for (let r = b.minR; r <= b.maxR; r++) {
+    const row = [];
+    for (let c = b.minC; c <= b.maxC; c++) { const cell = S.cells[key(r, c)]; row.push(cell ? cellOut(cell.v) : ''); }
+    lines.push(row.join(sep));
+  }
+  return lines.join('\r\n') + '\r\n';
+}
+const exportName = fmt => { const d = new Date(), p = n => String(n).padStart(2, '0');
+  return `warehouse-layout-${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}.${fmt}`; };
+const mime = fmt => fmt === 'tsv' ? 'text/tab-separated-values' : 'text/csv';
+
+function openExport() {
+  if (!contentBounds()) { toast('Nothing to export yet — scan something first.'); return; }
+  refreshExport();
+  $('expShare').classList.toggle('hidden', !navigator.canShare);
+  $('dlgExport').showModal();
+}
+function refreshExport() {
+  document.querySelectorAll('#fmtSeg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.fmt === expFmt)));
+  const text = buildExport(expFmt), b = contentBounds();
+  $('expPreview').value = text.split('\r\n').slice(0, 12).join('\n');
+  $('expInfo').textContent = `${b.maxR - b.minR + 1} rows × ${b.maxC - b.minC + 1} columns · no headers · empty cells kept as blanks`;
+}
+$('fmtSeg').addEventListener('click', e => { const f = e.target.closest('[data-fmt]'); if (!f) return; expFmt = f.dataset.fmt; try { localStorage.setItem('whs-export-fmt', expFmt); } catch (_) {} refreshExport(); });
+$('expDownload').addEventListener('click', () => {
+  const blob = new Blob([buildExport(expFmt)], { type: mime(expFmt) });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = exportName(expFmt);
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+  toast('Downloaded ' + a.download);
+});
+$('expCopy').addEventListener('click', async () => {
+  const text = buildExport(expFmt);
+  try { await navigator.clipboard.writeText(text); }
+  catch (_) { const t = $('expPreview'); t.value = text; t.select(); document.execCommand('copy'); }
+  toast('Copied — paste straight into Excel / Sheets');
+});
+$('expShare').addEventListener('click', async () => {
+  const file = new File([buildExport(expFmt)], exportName(expFmt), { type: mime(expFmt) });
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) await navigator.share({ files: [file], title: file.name });
+    else toast('Sharing files is not supported here — use Download.');
+  } catch (e) { if (e.name !== 'AbortError') toast('Share failed: ' + e.message); }
+});
+
+/* ================= Import (restore from an exported file) ================= */
+function parseDelimited(text) {
+  text = text.replace(/^﻿/, '');
+  if (text.includes('\t')) return text.split(/\r?\n/).map(l => l.split('\t'));
+  const rows = []; let row = [], f = '', q = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) { if (ch === '"') { if (text[i + 1] === '"') { f += '"'; i++; } else q = false; } else f += ch; }
+    else if (ch === '"') q = true;
+    else if (ch === ',') { row.push(f); f = ''; }
+    else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; row.push(f); rows.push(row); row = []; f = ''; }
+    else f += ch;
+  }
+  if (f || row.length) { row.push(f); rows.push(row); }
+  return rows;
+}
+$('btnImport').addEventListener('click', () => $('fileImport').click());
+$('fileImport').addEventListener('change', async e => {
+  const file = e.target.files[0]; e.target.value = '';
+  if (!file) return;
+  const rows = parseDelimited(await file.text());
+  const cells = {};
+  rows.forEach((row, r) => row.forEach((v, c) => { v = v.trim(); if (v) cells[key(r, c)] = LANDMARKS.includes(v.toUpperCase()) ? { v, m: true } : { v }; }));
+  const n = Object.keys(cells).length;
+  if (!n) { toast('No data found in that file'); return; }
+  if (Object.keys(S.cells).length && !confirm(`Replace the current layout with ${n} cells from ${file.name}? (You can Undo.)`)) return;
+  commit(() => { S.cells = cells; S.cur = { r: 0, c: 0 }; });
+  $('dlgMenu').close();
+  toast(`Imported ${n} cells`);
+});
+
+/* ================= Edit dialog ================= */
+function openEdit() {
+  const cell = S.cells[key(S.cur.r, S.cur.c)];
+  $('editName').textContent = cellName(S.cur.r, S.cur.c);
+  $('editVal').value = cell ? cell.v : '';
+  $('editMark').checked = !!(cell && cell.m);
+  $('dlgEdit').showModal();
+  setTimeout(() => $('editVal').focus(), 50);
+}
+$('chips').innerHTML = LANDMARKS.map(l => `<button type="button" data-lm="${l}" class="px-2.5 h-8 rounded-full bg-amber-100 text-amber-900 text-xs font-semibold">${l}</button>`).join('');
+$('chips').addEventListener('click', e => { const b = e.target.closest('[data-lm]'); if (!b) return; $('editVal').value = b.dataset.lm; $('editMark').checked = true; });
+$('editForm').addEventListener('submit', e => {
+  if (e.submitter && e.submitter.value !== 'save') return;
+  const v = $('editVal').value.replace(/[\r\n\t]+/g, ' ').trim(), k = key(S.cur.r, S.cur.c), m = $('editMark').checked;
+  commit(() => { if (v) S.cells[k] = m ? { v, m: true } : { v }; else delete S.cells[k]; });
+  if (v && !m) { const d = findCode(v, k); if (d) { const [r, c] = d.split(',').map(Number); toast(`Note: ${v} also appears at ${cellName(r, c)}`, { ms: 4000 }); } }
+});
+$('editClear').addEventListener('click', () => { $('dlgEdit').close(); clearCell(); });
+document.querySelectorAll('[data-struct]').forEach(b => b.addEventListener('click', () => restructure(b.dataset.struct)));
+
+/* ================= Menu dialog ================= */
+function openMenu() {
+  document.querySelectorAll('#stepSeg button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.step === S.settings.step)));
+  document.querySelectorAll('[data-set]').forEach(i => { i.checked = !!S.settings[i.dataset.set]; });
+  const n = Object.keys(S.cells).length;
+  $('menuInfo').innerHTML = `${n} cells stored on this device. Last saved ${S.saved ? new Date(S.saved).toLocaleString() : 'never'}.<br>` +
+    `Data lives in this browser only — export regularly as a backup. v${VERSION}`;
+  $('dlgMenu').showModal();
+}
+$('stepSeg').addEventListener('click', e => { const b = e.target.closest('[data-step]'); if (!b) return; S.settings.step = b.dataset.step; save(); renderStatus(); document.querySelectorAll('#stepSeg button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); });
+document.querySelectorAll('[data-set]').forEach(i => i.addEventListener('change', () => { S.settings[i.dataset.set] = i.checked; save(); }));
+$('btnNew').addEventListener('click', () => {
+  if (!confirm('Start a new, empty layout? Export first if you need the current one. (You can Undo.)')) return;
+  commit(() => { S.cells = {}; S.cur = { r: 0, c: 0 }; S.last = ''; });
+  $('dlgMenu').close();
+});
+document.querySelectorAll('dialog [data-close]').forEach(b => b.addEventListener('click', () => b.closest('dialog').close()));
+document.querySelectorAll('dialog').forEach(d => d.addEventListener('click', e => { if (e.target === d) d.close(); })); // tap backdrop to close
+
+/* ================= Wire up controls ================= */
+function holdRepeat(btn, fn) {
+  let t1, t2;
+  const stop = () => { clearTimeout(t1); clearInterval(t2); };
+  btn.addEventListener('pointerdown', e => { e.preventDefault(); fn(); t1 = setTimeout(() => { t2 = setInterval(fn, 110); }, 420); });
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => btn.addEventListener(ev, stop));
+}
+document.querySelectorAll('[data-dir]').forEach(b => holdRepeat(b, () => move(b.dataset.dir)));
+document.addEventListener('contextmenu', e => { if (e.target.closest('button, #grid')) e.preventDefault(); });
+
+gridEl.addEventListener('click', e => {
+  const el = e.target.closest('.g-cell'); if (!el) return;
+  const r = +el.dataset.r, c = +el.dataset.c;
+  if (r === S.cur.r && c === S.cur.c) openEdit(); else setCursor(r, c);
+});
+
+$('btnScan').addEventListener('click', () => (scanning || starting) ? stopScan() : startScan());
+$('btnTorch').addEventListener('click', toggleTorch);
+$('btnEdit').addEventListener('click', openEdit);
+$('btnClear').addEventListener('click', clearCell);
+$('btnUndo').addEventListener('click', undo);
+$('btnUndo2').addEventListener('click', undo);
+$('btnEntrance').addEventListener('click', toggleEntrance);
+$('btnExport').addEventListener('click', openExport);
+$('btnMenu').addEventListener('click', openMenu);
+$('btnStep').addEventListener('click', () => {
+  S.settings.step = STEP_CYCLE[(STEP_CYCLE.indexOf(S.settings.step) + 1) % STEP_CYCLE.length];
+  save(); renderStatus();
+});
+
+/* ================= Lifecycle / crash protection ================= */
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { save(); if (scanning) stopScan(); }
+});
+window.addEventListener('pagehide', save);
+window.addEventListener('storage', e => { if (e.key === STORE_KEY && e.newValue) { S = load(); render(); toast('Layout updated from another tab'); } });
+navigator.storage?.persist?.().catch(() => {});   // ask the browser not to evict our data
+
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(() => {}));
+}
+
+render();
+if (Object.keys(S.cells).length) toast(`Session restored · ${Object.keys(S.cells).length} cells`);
+})();
+</script>
+</body>
+</html>

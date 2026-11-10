@@ -1,0 +1,16 @@
+{
+  "name": "Warehouse Layout Mapper",
+  "short_name": "Layout Mapper",
+  "description": "Map a warehouse floor plan by scanning location barcodes into a grid.",
+  "id": "./",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f1f5f9",
+  "theme_color": "#1e293b",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
