@@ -72,6 +72,14 @@
   .dpad-sm { background: #e2e8f0; color: #334155; box-shadow: 0 2px 0 #94a3b8; font: 600 11px system-ui; }
   .dpad-sm:active { background: #cbd5e1; }
   #dpad { gap: 6px; }
+  /* ---------- Move mode ---------- */
+  #btnMove[aria-pressed="true"] { background: #f59e0b; color: #1f2937; box-shadow: 0 2px 0 #b45309; }
+  body.moving [data-dir] { background: #d97706; box-shadow: 0 2px 0 #92400e; }
+  body.moving [data-dir]:active { background: #b45309; }
+  body.moving .g-active { border-style: dashed !important; border-color: #f59e0b !important; box-shadow: 0 0 0 3px rgba(245, 158, 11, .35); }
+  #moveHint { display: none; }
+  body.moving #moveHint { display: block; }
+  body.moving #lastScanRow { display: none; }
   .bottom-btn { height: 48px; }
   /* Shorter phones / camera open: compact controls so the grid keeps usable space */
   @media (max-height: 780px) {
@@ -130,7 +138,8 @@
   <div class="flex items-start gap-2">
     <div class="flex-1 min-w-0 text-xs leading-snug">
       <div>Current Cell: <b id="curName">A1</b> <span id="curContent" class="text-slate-500"></span></div>
-      <div class="truncate">Last Scan: <b id="lastScan" class="font-mono">—</b></div>
+      <div id="lastScanRow" class="truncate">Last Scan: <b id="lastScan" class="font-mono">—</b></div>
+      <div id="moveHint" class="truncate font-semibold text-amber-700">MOVE: arrows carry this cell</div>
     </div>
     <button id="btnStep" class="shrink-0 h-8 px-2 rounded-md border border-slate-300 text-xs text-slate-700 active:bg-slate-100">Auto-step: →</button>
   </div>
@@ -143,7 +152,7 @@
       <button data-dir="left" class="dpad-btn" aria-label="Left"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M19 12H5M12 5l-7 7 7 7"/></svg></button>
       <button id="btnEdit" class="dpad-btn !bg-slate-300 !text-slate-700 text-xs font-semibold" aria-label="Edit cell">Edit</button>
       <button data-dir="right" class="dpad-btn" aria-label="Right"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M5 12h14M12 5l7 7-7 7"/></svg></button>
-      <div></div>
+      <button id="btnMove" class="dpad-btn dpad-sm" aria-pressed="false" aria-label="Move cell" title="Hold + arrows, or tap to toggle">✥ Move</button>
       <button data-dir="down" class="dpad-btn" aria-label="Down"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M12 5v14M5 12l7 7 7-7"/></svg></button>
       <div></div>
     </div>
@@ -432,7 +441,48 @@ function setCursor(r, c) {
   renderStatus();
   save();
 }
-function move(dir) { const [dr, dc] = DIRS[dir]; setCursor(S.cur.r + dr, S.cur.c + dc); }
+function move(dir) {
+  if (moveMode) { moveCell(dir); return; }
+  const [dr, dc] = DIRS[dir]; setCursor(S.cur.r + dr, S.cur.c + dc);
+}
+
+/* ================= Move mode: carry the active cell's content with the arrows =================
+   Hold Move + arrows (momentary), or tap Move to latch it on/off. Occupied targets are swapped. */
+let moveMode = false, moveHeld = false, movedWhileHeld = false, moveWasOn = false;
+function setMoveMode(on) {
+  moveMode = on;
+  document.body.classList.toggle('moving', on);
+  $('btnMove').setAttribute('aria-pressed', String(on));
+}
+function moveCell(dir) {
+  const [dr, dc] = DIRS[dir];
+  const { r, c } = S.cur, from = key(r, c), to = key(r + dr, c + dc);
+  const a = S.cells[from];
+  if (moveHeld) movedWhileHeld = true;
+  if (!a) { setCursor(r + dr, c + dc); toast('Empty cell — move the cursor onto a filled cell to carry it'); return; }
+  const b = S.cells[to];
+  commit(() => {
+    S.cells[to] = a;
+    if (b) S.cells[from] = b; else delete S.cells[from];
+    S.cur = { r: r + dr, c: c + dc };
+  });
+  if (b) toast(`Swapped with ${b.v}`);
+}
+const btnMove = $('btnMove');
+btnMove.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  try { btnMove.setPointerCapture(e.pointerId); } catch (_) {}
+  moveWasOn = moveMode; moveHeld = true; movedWhileHeld = false;
+  setMoveMode(true);
+});
+const releaseMove = () => {
+  if (!moveHeld) return;
+  moveHeld = false;
+  if (movedWhileHeld || moveWasOn) setMoveMode(false);          // used as hold-modifier, or tapped to turn off
+  else toast('Move mode on — arrows now carry the cell. Tap Move again to finish.');
+};
+btnMove.addEventListener('pointerup', releaseMove);
+btnMove.addEventListener('pointercancel', releaseMove);
 
 /* ================= Cell actions ================= */
 function place(raw, { fromScan = false, force = false } = {}) {
@@ -611,7 +661,8 @@ document.addEventListener('keydown', e => {
   if (document.querySelector('dialog[open]') || /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
   const arrow = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' }[e.key];
-  if (arrow) { e.preventDefault(); move(arrow); return; }
+  if (arrow) { e.preventDefault(); e.shiftKey ? moveCell(arrow) : move(arrow); return; }
+  if (e.key === 'Escape' && moveMode) { setMoveMode(false); return; }
   const now = Date.now();
   if (e.key === 'Enter') {
     if (wedgeBuf.length >= 3 && now - wedgeT < 100) { e.preventDefault(); place(wedgeBuf, { fromScan: true }); }

@@ -14,6 +14,10 @@ Map a warehouse floor plan by walking the aisles and scanning location barcodes 
 ## Using it
 - **D-pad**: moves the blue cursor. Hold a button to repeat. Going past an edge adds a new row or column, including above or to the left of the current layout.
 - **Tap a cell** to move the cursor there. **Tap the active cell** (or press **Edit**) to type a value by hand, pick a landmark (ENTRANCE, DOCK, PILLAR…), or insert/delete rows and columns.
+- **✥ Move** (bottom-left of the D-pad) moves a cell's contents. If the target cell already holds something, the two swap, so nothing is overwritten. Every step can be undone.
+  - **Hold Move and tap arrows:** the cell travels with the arrows. Releasing Move turns move mode off.
+  - **Tap Move** to keep move mode on for one-handed use, then tap it again to turn it off. While it's on, the arrows turn amber and the active cell has a dashed outline.
+  - On a keyboard, Shift+Arrow does the same, and Esc turns move mode off.
 - **Scan Barcode** opens the rear camera. Each read fills the active cell, beeps or vibrates, and moves the cursor in the **Auto-step** direction (tap the chip to cycle → ↓ ← ↑ Off). The camera stays on between scans unless you turn that off in ☰ Settings.
 - **🔦** turns the flashlight on or off. It's only enabled when the camera supports it.
 - **Duplicates**: if a code is already on the grid, it isn't placed, and a toast offers "Place anyway". Duplicates are outlined in red.
